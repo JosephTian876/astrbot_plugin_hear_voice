@@ -1,0 +1,523 @@
+{
+  "enable_voice": {
+    "description": "启用语音转写（总开关）",
+    "type": "bool",
+    "default": true,
+    "hint": "关闭后插件不处理任何语音消息。"
+  },
+  "provider_engine": {
+    "description": "主语音识别引擎",
+    "type": "string",
+    "options": [
+      "auto",
+      "gemini",
+      "deepseek_asr",
+      "openai_whisper"
+    ],
+    "labels": [
+      "Auto / 自动识别提供商或地址（推荐）",
+      "Gemini / Gemini 多模态语音理解",
+      "DeepSeek ASR / DeepSeek 官方语音识别 (/v1/tools/asr)",
+      "OpenAI Whisper / Whisper 兼容语音转写"
+    ],
+    "default": "auto",
+    "hint": "auto 会自动根据 provider_id / api_base 判定引擎：含 deepseek.com、/tools/asr 或 provider_id 含 deepseek 自动走 DeepSeek 官方 ASR；Whisper 类型走 Whisper；其余默认走 Gemini 多模态。"
+  },
+  "provider_id": {
+    "description": "主通道：复用 AstrBot 模型提供商（推荐）",
+    "type": "string",
+    "default": "",
+    "_special": "select_provider",
+    "hint": "从 AstrBot 已配置提供商中选择主语音通道（支持 Gemini 如 AlmoonsGemini-1，或 DeepSeek 如 deepseek/deepseek-flash）。选中后自动复用其地址、密钥、模型名与代理；留空则使用下方主通道独立配置。"
+  },
+  "api_format": {
+    "description": "主通道 Gemini 接口协议格式",
+    "type": "string",
+    "options": [
+      "auto",
+      "gemini_native",
+      "openai_compat"
+    ],
+    "labels": [
+      "Auto / 自动识别（推荐）",
+      "Gemini Native / Gemini 原生 generateContent",
+      "OpenAI Compat / OpenAI 兼容 input_audio"
+    ],
+    "default": "auto",
+    "hint": "仅当主引擎为 Gemini 时生效。auto 会根据所选 Provider 类型或 api_base 自动判定协议：Google GenAI 走原生 generateContent，OpenAI 兼容接口走 /chat/completions（携带 input_audio.format）。"
+  },
+  "auth_mode": {
+    "description": "主通道 Gemini 原生端点鉴权方式",
+    "type": "string",
+    "options": [
+      "auto",
+      "x_goog_api_key",
+      "bearer"
+    ],
+    "labels": [
+      "Auto / 自动（原生 x-goog-api-key，兼容 Bearer）",
+      "x-goog-api-key / Gemini 官方与标准中转",
+      "Authorization Bearer / Bearer 令牌中转"
+    ],
+    "default": "auto",
+    "hint": "仅影响 Gemini 原生接口请求头。DeepSeek ASR 与 OpenAI 兼容接口始终使用 Authorization: Bearer。"
+  },
+  "api_base": {
+    "description": "主通道独立接口基地址",
+    "type": "string",
+    "default": "",
+    "hint": "支持 Gemini 原生基地址（如 https://generativelanguage.googleapis.com）、OpenAI 兼容基地址（/v1 或 /v1/chat/completions），或 DeepSeek 官方地址（留空/https://api.deepseek.com/https://api.deepseek.com/v1 自动规范化为 /v1/tools/asr）。"
+  },
+  "api_key": {
+    "description": "主通道独立接口 API Key",
+    "type": "string",
+    "default": "",
+    "secret": true,
+    "obvious_hint": true,
+    "hint": "仅在未选择 provider_id 或需要覆盖凭据时使用。日志严禁输出明文密钥。"
+  },
+  "model": {
+    "description": "主通道语音识别模型 ID（留空则继承 Provider）",
+    "type": "string",
+    "default": "",
+    "hint": "Gemini 独立接口默认回退 gemini-2.5-flash；DeepSeek 官方 ASR 无需模型字段（留空即可）；选择 provider_id 时留空将直接继承其模型名（完整保留全角或方括号前缀）。"
+  },
+  "proxy": {
+    "description": "专用 HTTP/HTTPS 代理（可选）",
+    "type": "string",
+    "default": "",
+    "hint": "形如 http://127.0.0.1:7890。留空时若选择了 provider_id 会自动继承该 Provider 的代理设置。"
+  },
+  "verify_ssl": {
+    "description": "校验模型接口 SSL 证书",
+    "type": "bool",
+    "default": true,
+    "hint": "建议保持开启。仅在自签证书或受信任中转链不完整时临时关闭。"
+  },
+  "enable_fallback": {
+    "description": "启用主识别失败自动切换回退通道",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后，当主通道不可重试失败（4xx）、重试耗尽（429/5xx/超时）或返回错误载荷时，立即自动切换至下方回退通道（需至少配置回退 provider_id 或独立 API Key）。"
+  },
+  "fallback_engine": {
+    "description": "回退语音识别引擎",
+    "type": "string",
+    "options": [
+      "auto",
+      "deepseek_asr",
+      "gemini",
+      "openai_whisper"
+    ],
+    "labels": [
+      "Auto / 自动识别提供商或地址（推荐）",
+      "DeepSeek ASR / DeepSeek 官方语音识别 (/v1/tools/asr)",
+      "Gemini / Gemini 多模态语音理解",
+      "OpenAI Whisper / Whisper 兼容语音转写"
+    ],
+    "default": "auto",
+    "hint": "auto 会根据 fallback_provider_id / fallback_api_base 自动判定回退引擎，例如选择 deepseek/deepseek-flash 自动走 DeepSeek 官方 ASR，选择备用 Gemini 自动走 Gemini 多模态。"
+  },
+  "fallback_provider_id": {
+    "description": "回退通道：复用 AstrBot 模型提供商（可选）",
+    "type": "string",
+    "default": "",
+    "_special": "select_provider",
+    "hint": "例如选择 deepseek/deepseek-flash 作为 DeepSeek 官方 ASR 回退，或选择备用 Gemini 提供商。留空且下方独立 Key 也为空时不启用回退。"
+  },
+  "fallback_api_format": {
+    "description": "回退通道 Gemini 接口协议格式",
+    "type": "string",
+    "options": [
+      "auto",
+      "gemini_native",
+      "openai_compat"
+    ],
+    "labels": [
+      "Auto / 自动识别（推荐）",
+      "Gemini Native / Gemini 原生 generateContent",
+      "OpenAI Compat / OpenAI 兼容 input_audio"
+    ],
+    "default": "auto",
+    "hint": "仅当回退引擎为 Gemini 时生效。"
+  },
+  "fallback_auth_mode": {
+    "description": "回退通道 Gemini 原生端点鉴权方式",
+    "type": "string",
+    "options": [
+      "auto",
+      "x_goog_api_key",
+      "bearer"
+    ],
+    "labels": [
+      "Auto / 自动（原生 x-goog-api-key，兼容 Bearer）",
+      "x-goog-api-key / Gemini 官方与标准中转",
+      "Authorization Bearer / Bearer 令牌中转"
+    ],
+    "default": "auto",
+    "hint": "仅影响回退 Gemini 原生接口请求头。"
+  },
+  "fallback_api_base": {
+    "description": "回退通道独立接口基地址",
+    "type": "string",
+    "default": "",
+    "hint": "回退为 DeepSeek ASR 时可留空或填 https://api.deepseek.com/v1（自动规范化为 /v1/tools/asr）；回退为 Gemini 时填基地址。"
+  },
+  "fallback_api_key": {
+    "description": "回退通道独立接口 API Key",
+    "type": "string",
+    "default": "",
+    "secret": true,
+    "obvious_hint": true,
+    "hint": "仅在未选择 fallback_provider_id 或需要覆盖回退凭据时使用。日志严禁输出明文密钥。"
+  },
+  "fallback_model": {
+    "description": "回退通道模型 ID（留空则继承 Provider）",
+    "type": "string",
+    "default": "",
+    "hint": "DeepSeek ASR 无需模型字段；Gemini 独立接口默认回退 gemini-2.5-flash。"
+  },
+  "fallback_proxy": {
+    "description": "回退通道专用代理（留空则继承 Provider 或主代理）",
+    "type": "string",
+    "default": "",
+    "hint": "形如 http://127.0.0.1:7890。通常留空即可。"
+  },
+  "output_mode": {
+    "description": "Gemini 语音分析输出模式",
+    "type": "string",
+    "options": [
+      "rich",
+      "simple"
+    ],
+    "labels": [
+      "Rich / 原话 + 6 项声学情绪分析（推荐）",
+      "Simple / 仅纯原话转写"
+    ],
+    "default": "rich",
+    "hint": "双轨隔离设计：Gemini rich 模式下写入消息链 Plain 与记忆系统的也只有纯原话，6 项声学分析仅在阶段 2 临时注入当轮 LLM 请求。若本轮最终由 DeepSeek ASR 或 OpenAI Whisper 等纯转写引擎完成，将自动仅输出纯净原话，绝不编造 6 项模板。"
+  },
+  "enable_model_normalize": {
+    "description": "启用模型名清洗",
+    "type": "bool",
+    "default": false,
+    "hint": "默认关闭，完整保留如 ［抗截断］gemini-3.8-flash 或 [AN]gemini-4 等渠道模型名。仅当你需要自动剥离 vendor/、[ASCII标签] 或 models/ 前缀时开启。"
+  },
+  "enable_transcript_clean": {
+    "description": "启用转写文本基础清洗",
+    "type": "bool",
+    "default": true,
+    "hint": "自动压缩多余连续空行，并按 max_transcript_chars 截断超长文本。"
+  },
+  "enable_text_normalize": {
+    "description": "启用可选模型二次文本规范化",
+    "type": "bool",
+    "default": false,
+    "hint": "开启后会对转写原话额外发起一次纯文本纠错与标点整理请求（仅在存在可用文本/Gemini模型时执行，不重传音频，失败自动回退原转写）。默认关闭以减少延迟与费用。"
+  },
+  "max_transcript_chars": {
+    "description": "单条转写最大字符数",
+    "type": "int",
+    "default": 2000,
+    "min": 50,
+    "max": 20000,
+    "hint": "超出此长度的转写文本会被安全截断。"
+  },
+  "transcript_prefix": {
+    "description": "直发语音写入消息链前缀",
+    "type": "string",
+    "default": "[语音消息]: ",
+    "hint": "阶段 1 写入 Plain 与 message_str 的前缀，例如 [语音消息]: 你好。"
+  },
+  "quoted_transcript_prefix": {
+    "description": "引用语音写入消息链前缀",
+    "type": "string",
+    "default": "[引用语音消息]: ",
+    "hint": "当消息引用（回复）了一条语音时写入消息链的前缀。"
+  },
+  "voice_instruction": {
+    "description": "自定义 Gemini 语音识别提示词",
+    "type": "text",
+    "default": "",
+    "hint": "留空则按 output_mode 自动生成提示词；填写后优先使用自定义提示词（仅对 Gemini 引擎生效）。"
+  },
+  "enable_private": {
+    "description": "启用私聊语音转写",
+    "type": "bool",
+    "default": true,
+    "hint": "关闭后不再处理私聊语音消息。"
+  },
+  "enable_group_voice": {
+    "description": "启用群聊语音转写",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后可处理群聊语音（可配合下方群白名单精确控制）。"
+  },
+  "group_whitelist": {
+    "description": "群聊白名单",
+    "type": "list",
+    "items": {
+      "type": "string"
+    },
+    "default": [],
+    "hint": "群号字符串列表；留空表示允许所有群聊（当 enable_group_voice=true 时）。"
+  },
+  "user_whitelist": {
+    "description": "用户白名单",
+    "type": "list",
+    "items": {
+      "type": "string"
+    },
+    "default": [],
+    "hint": "发送者用户 ID 字符串列表；留空表示不限制发送者。"
+  },
+  "group_voice_reply_probability": {
+    "description": "普通群语音允许触发默认回复概率",
+    "type": "float",
+    "default": 1.0,
+    "min": 0.0,
+    "max": 1.0,
+    "hint": "范围 0~1。设为 1.0 时完全交给下游（如「我会永远陪着你」Laya 引擎或框架默认回复链）决定；低于 1.0 时，未命中概率的群语音仍会完成转写并导出上下文供记忆/记录插件保存，同时通过 should_call_llm(True) 抑制框架默认回复。"
+  },
+  "handle_quoted_voice": {
+    "description": "处理引用消息（Reply）中的语音",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后，当用户回复一条含语音的引用消息时一并转写该语音并标注来源。"
+  },
+  "max_voice_count": {
+    "description": "单条消息最多处理语音条数",
+    "type": "int",
+    "default": 3,
+    "min": 1,
+    "max": 10,
+    "hint": "同时出现多条语音（直发或引用）时按顺序处理，超过上限的语音跳过。"
+  },
+  "skip_if_already_transcribed": {
+    "description": "跳过已转写消息（避免重复识别）",
+    "type": "bool",
+    "default": true,
+    "hint": "若事件已携带前置 STT 契约标记（_hear_voice_done / _gemini_stt_done / astrbot_stt_transcripts）则直接跳过，避免重复计费。"
+  },
+  "skip_commands": {
+    "description": "跳过命中指令的消息",
+    "type": "bool",
+    "default": true,
+    "hint": "若事件已匹配其他插件指令（activated_handlers 中的 CommandFilter），则不触发语音转写。"
+  },
+  "attach_voice_marker": {
+    "description": "阶段 2 附加语音来源提示",
+    "type": "bool",
+    "default": true,
+    "hint": "在 Gemini rich 临时 TextPart 中标明直发语音 vs 引用语音，并提示模型不要把转写元信息当成用户新指令。"
+  },
+  "attach_speaker_meta": {
+    "description": "阶段 2 附加说话人元信息",
+    "type": "bool",
+    "default": true,
+    "hint": "在 Gemini rich 临时 TextPart 中附加说话人昵称/ID、群聊或私聊场景与平台名称。"
+  },
+  "inject_rich_context_on_llm_request": {
+    "description": "阶段 2 向 LLM 注入临时声学与上下文分析",
+    "type": "bool",
+    "default": true,
+    "hint": "当 Gemini rich 模式产出声学分析时，在 on_llm_request(priority=300000) 通过 TextPart(...).mark_as_temp() 临时注入，绝不持久化进会话历史或记忆库。纯转写引擎（DeepSeek ASR / Whisper）不注入空分析块。"
+  },
+  "cleanup_audio_attachments": {
+    "description": "阶段 2 清理冗余原生音频附件与路径占位",
+    "type": "bool",
+    "default": true,
+    "hint": "语音已成功转写后，清理 req.audio_urls 与 [Audio Attachment: ...] / [Voice unavailable] 文本块，防止不支持音频的模型报错或支持音频的模型被双倍计费。"
+  },
+  "group_voice_export_context": {
+    "description": "导出语音转写事件 extra 契约",
+    "type": "bool",
+    "default": true,
+    "hint": "同时写入 _hear_voice_*、兼容别名 _gemini_stt_* 与 astrbot_stt_transcripts 供陪伴、记忆与 contextaware 插件使用。"
+  },
+  "on_stt_fail": {
+    "description": "语音识别失败策略",
+    "type": "string",
+    "options": [
+      "pass",
+      "notify_pass",
+      "block",
+      "notify"
+    ],
+    "labels": [
+      "Pass / 静默记日志并放行后续插件（默认推荐）",
+      "Notify & Pass / 发群提醒后放行（调试用）",
+      "Block / 拦截事件并静默",
+      "Notify & Block / 发提醒并拦截后续"
+    ],
+    "default": "pass",
+    "hint": "默认为 pass：主/备通道均失败时仅在后台日志记录脱敏告警，绝不向 QQ 群或私聊发送失败报错刷屏，原事件静默放行给后续插件处理。"
+  },
+  "show_transcript": {
+    "description": "调试：向用户回显转写结果",
+    "type": "bool",
+    "default": false,
+    "hint": "开启后会在转写完成时额外发送一条提示消息，仅建议调试排查时开启。"
+  },
+  "stt_max_concurrency": {
+    "description": "语音识别最大并发数",
+    "type": "int",
+    "default": 3,
+    "min": 1,
+    "max": 10,
+    "hint": "使用 asyncio.Semaphore 限制同时进入解析/转码/API 调用的语音数量，防止群聊并发语音触发上游限流。"
+  },
+  "max_audio_mb": {
+    "description": "单条语音大小上限（MB）",
+    "type": "int",
+    "default": 20,
+    "min": 1,
+    "max": 200,
+    "hint": "超过此体积的音频文件将被安全拒绝（DeepSeek ASR 另有 8 MiB 与 120 秒官方硬上限，超限时会自动尝试转码或安全拒绝）。"
+  },
+  "timeout_sec": {
+    "description": "请求超时时间（秒）",
+    "type": "int",
+    "default": 120,
+    "min": 5,
+    "max": 600,
+    "hint": "作用于远程音频下载与 Gemini / DeepSeek / Whisper API 请求。"
+  },
+  "retry_times": {
+    "description": "模型请求重试次数",
+    "type": "int",
+    "default": 2,
+    "min": 0,
+    "max": 5,
+    "hint": "针对 HTTP 429 / 5xx 与瞬时网络异常执行指数退避重试；不可重试 4xx（如 400/401/403）不重试并立即进入回退流程。"
+  },
+  "voice_file_wait_sec": {
+    "description": "本地语音文件落盘等待秒数",
+    "type": "int",
+    "default": 5,
+    "min": 0,
+    "max": 60,
+    "hint": "异步轮询等待慢磁盘或容器挂载文件就绪的时间上限。"
+  },
+  "ffmpeg_path": {
+    "description": "FFmpeg 可执行文件路径（可选）",
+    "type": "string",
+    "default": "",
+    "hint": "留空自动从 PATH 查找。SILK 语音可由纯 Python pysilk 直接解码为 24kHz 16-bit PCM WAV（Gemini 与 DeepSeek ASR 均可直传），非 SILK/非标准 WAV 格式需要 ffmpeg。"
+  },
+  "enable_get_record_fallback": {
+    "description": "启用 OneBot get_record / get_file 兜底",
+    "type": "bool",
+    "default": true,
+    "hint": "本地路径不存在或不可读时，自动通过 aiocqhttp 的 get_record（必要时回退 get_file）获取音频 base64、URL 或本地路径。"
+  },
+  "allow_napcat_local_record_url": {
+    "description": "允许 NapCat 回环地址语音回调 URL",
+    "type": "bool",
+    "default": true,
+    "hint": "仅对 get_record/get_file 返回的 127.0.0.1 / localhost 回调 URL 放行下载。"
+  },
+  "path_remap_from": {
+    "description": "路径前缀映射：容器内原始前缀",
+    "type": "string",
+    "default": "",
+    "hint": "多容器部署时 NapCat 上报路径前缀，例如 /app/.config/QQ。留空自动尝试常见映射。"
+  },
+  "path_remap_to": {
+    "description": "路径前缀映射：宿主机目标前缀",
+    "type": "string",
+    "default": "",
+    "hint": "与 path_remap_from 配对使用，填写 AstrBot 实际可访问的挂载路径。"
+  },
+  "allow_remote_audio_url": {
+    "description": "允许下载远程 HTTP/HTTPS 语音 URL",
+    "type": "bool",
+    "default": false,
+    "hint": "默认关闭以防 SSRF；开启后仍受内网阻断与域名白名单约束。"
+  },
+  "remote_audio_domain_whitelist": {
+    "description": "远程语音域名白名单",
+    "type": "list",
+    "items": {
+      "type": "string"
+    },
+    "default": [],
+    "hint": "仅当 allow_remote_audio_url=true 时生效；支持精确域名或 .suffix 后缀匹配。留空不限制域名（仍拦截内网）。"
+  },
+  "block_private_network": {
+    "description": "拦截内网与回环地址（SSRF 防护）",
+    "type": "bool",
+    "default": true,
+    "hint": "强烈建议开启：拦截 127.0.0.0/8、10.x、172.16-31.x、192.168.x、169.254.x、IPv6 私网/回环及 DNS 解析后私网 IP。"
+  },
+  "strict_local_path_check": {
+    "description": "启用本地语音路径白名单校验",
+    "type": "bool",
+    "default": true,
+    "hint": "强烈建议开启：通过 realpath 规范化与 commonpath 校验阻止目录穿越与越权读取任意本地文件。"
+  },
+  "local_audio_allowed_dirs": {
+    "description": "本地语音允许目录白名单",
+    "type": "list",
+    "items": {
+      "type": "string"
+    },
+    "default": [
+      "data",
+      "data/temp"
+    ],
+    "hint": "插件会自动追加系统临时目录、AstrBot temp 目录及已发现的 QQ/NapCat 目录。"
+  },
+  "enable_temp_cleanup": {
+    "description": "启用临时音频文件清理",
+    "type": "bool",
+    "default": true,
+    "hint": "自动清理插件生成的 hvstt_* 临时文件。"
+  },
+  "temp_cleanup_on_start": {
+    "description": "启动/重载时清理遗留临时文件",
+    "type": "bool",
+    "default": true,
+    "hint": "插件加载时清理历史遗留临时文件。"
+  },
+  "temp_cleanup_interval_sec": {
+    "description": "定时清理临时文件间隔（秒）",
+    "type": "int",
+    "default": 1800,
+    "min": 0,
+    "max": 86400,
+    "hint": "0 表示禁用定时任务；建议 600~3600。"
+  },
+  "temp_cleanup_max_age_sec": {
+    "description": "定时清理最小文件年龄（秒）",
+    "type": "int",
+    "default": 300,
+    "min": 0,
+    "max": 86400,
+    "hint": "仅清理超过该时长的临时文件，防止误删正在处理的音频。"
+  },
+  "temp_cleanup_on_terminate": {
+    "description": "卸载/重载插件时清理临时文件",
+    "type": "bool",
+    "default": true,
+    "hint": "插件 terminate() 时清理临时文件。"
+  },
+  "register_stt_provider": {
+    "description": "可选：向 AstrBot 注册标准 STT Provider 适配器",
+    "type": "bool",
+    "default": false,
+    "hint": "仅在需要给实时语音房或显式调用 get_using_stt_provider() 的场景开启；启用本项时请保持 AstrBot 全局 provider_stt_settings.enable=false，避免框架 PreProcessStage 提前覆盖 Record。"
+  },
+  "stt_provider_id": {
+    "description": "注册的运行时 STT Provider ID",
+    "type": "string",
+    "default": "hear_voice_stt",
+    "hint": "仅当 register_stt_provider=true 时生效，用于挂载运行时 HearVoiceSTTProvider 实例（底层统一走主+备识别引擎）。"
+  },
+  "debug_mode": {
+    "description": "详细调试日志",
+    "type": "bool",
+    "default": false,
+    "hint": "输出解析路径、引擎选择、主备切换、格式探测、重试与注入诊断信息（始终自动脱敏密钥与签名参数）。"
+  }
+}

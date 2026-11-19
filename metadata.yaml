@@ -1,0 +1,29 @@
+name: astrbot_plugin_hear_voice
+display_name: 我听得见语音
+desc: 非抢答双阶段多引擎语音理解插件，支持 Gemini 多模态与 DeepSeek 官方 ASR (/v1/tools/asr) 主备自由组合与自动故障切换，静默放行默认失败策略，原生兼容陪伴与记忆插件。
+description: |
+  面向 AstrBot 的非抢答双阶段多引擎语音理解插件（我听得见语音），原生兼容「我会永远陪着你」（private_companion）与「我会牢牢记住你」（memory_companion）。
+
+  核心设计：
+  - 主/备双槽自由组合与自动无缝故障切换：同时支持 Gemini 多模态（原生 generateContent / OpenAI 兼容 input_audio）与 DeepSeek 官方 ASR（POST /v1/tools/asr，支持 16-bit PCM WAV 与 Ogg Opus）以及 OpenAI Whisper 协议，主引擎或备引擎可任意互为主备，主识别失败时自动记录脱敏告警并立即切换回退通道。
+  - 阶段 1（前置消息事件钩子，priority=300000）：在陪伴/记忆插件观测之前完成语音解析与主/备转写，绝不调用 request_llm() 抢答，也不删除原 Record 组件。提取纯原话以 `[语音消息]: ...` 写入 Plain 与 message_str，并导出 `_hear_voice_*`、`_gemini_stt_*` 与 `astrbot_stt_transcripts` 双重事件 extra 契约。
+  - 阶段 2（on_llm_request，priority=300000）：当 Gemini rich 模式输出 6 项声学/情绪分析时，通过临时 TextPart(mark_as_temp()) 注入本轮 LLM 请求而不污染聊天与记忆持久化；当最终命中 DeepSeek ASR / OpenAI Whisper 纯转写引擎时，仅输出干净纯原话（不编造 6 项声学模板，也不注入空分析块）；同时清理冗余的 `[Audio Attachment: ...]` 与 `audio_urls`，避免非音频对话模型报错或双倍计费。
+  - 静默放行默认失败策略：默认 `on_stt_fail="pass"`，识别失败仅记录脱敏告警日志并静默放行后续插件，绝不向 QQ 群/私聊发送报错刷屏。
+  - 支持直接复用 AstrBot 已配置 Provider（provider_id / fallback_provider_id）或独立配置接口，支持 SILK/AMR/WAV/MP3/Ogg Opus 等格式、OneBot get_record/get_file 兜底、SSRF 与本地路径安全校验、并发限流与可选标准 `hear_voice_stt` STTProvider 适配。
+version: 0.1.0
+author: JosephTian876
+repo: https://github.com/JosephTian876/astrbot_plugin_hear_voice
+short_desc: Gemini 多模态主/备 + DeepSeek 官方 ASR 主/备 + 非抢答双阶段语音理解，静默放行默认失败策略
+astrbot_version: ">=4.24.1,<5"
+support_platforms:
+  - aiocqhttp
+social_link: https://github.com/JosephTian876
+category: AI 增强
+tags:
+  - 语音识别
+  - STT
+  - Gemini
+  - DeepSeek
+  - ASR
+  - 多模态
+  - 陪伴兼容
