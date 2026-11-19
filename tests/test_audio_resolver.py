@@ -224,13 +224,22 @@ async def test_resolve_inline_base64_and_size_limit():
     assert await resolve_voice_audio(event_big, sources_big[0], cfg) is None
 
 
-def test_local_path_guard_and_remap(tmp_path):
+def test_local_path_guard_and_remap(tmp_path, monkeypatch):
+    # Isolate system temp dir inside tmp_path so tests on Linux (/tmp) and Windows (%TEMP%)
+    # keep outside_file genuinely outside all default allowed roots.
+    isolated_temp = tmp_path / "isolated_tmp"
+    isolated_temp.mkdir()
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(isolated_temp))
+    monkeypatch.setattr("hear_voice.config._resolve_astrbot_temp_dir", lambda: None)
+
     allowed = tmp_path / "allowed"
     allowed.mkdir()
     outside = tmp_path / "secret"
     outside.mkdir()
     good_file = allowed / "voice.wav"
     good_file.write_bytes(make_wav_bytes())
+    temp_file = isolated_temp / "cached.wav"
+    temp_file.write_bytes(make_wav_bytes())
     bad_ext = allowed / "passwd.txt"
     bad_ext.write_text("nope", encoding="utf-8")
     outside_file = outside / "private.wav"
@@ -245,9 +254,11 @@ def test_local_path_guard_and_remap(tmp_path):
         }
     )
     assert is_safe_local_audio_path(str(good_file), cfg) is True
+    assert is_safe_local_audio_path(str(temp_file), cfg) is True
     assert is_safe_local_audio_path(str(bad_ext), cfg) is False
     assert is_safe_local_audio_path(str(outside_file), cfg) is False
     assert is_safe_local_audio_path(str(allowed / ".." / "secret" / "private.wav"), cfg) is False
+    assert is_safe_local_audio_path(str(isolated_temp / ".." / "secret" / "private.wav"), cfg) is False
 
     remapped = remap_local_path("/app/.config/QQ/ptt/voice.wav", cfg)
     assert remapped.replace("\\", "/").endswith("/ptt/voice.wav")
