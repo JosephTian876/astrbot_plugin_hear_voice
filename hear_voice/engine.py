@@ -18,7 +18,7 @@ except ImportError:  # pragma: no cover - standalone import fallback
 
     logger = logging.getLogger("astrbot_plugin_hear_voice")
 
-from .audio_resolver import ResolvedAudio
+from .audio_resolver import ResolvedAudio, transcode_audio_to_wav_resolved
 from .config import (
     DEFAULT_MODEL,
     DEFAULT_OPENAI_WHISPER_URL,
@@ -29,7 +29,7 @@ from .config import (
     sanitize_error_message,
 )
 from .deepseek_client import DeepSeekAsrClient, normalize_deepseek_asr_url
-from .gemini_client import GeminiClient
+from .gemini_client import GeminiClient, is_unsupported_audio_format_400
 from .normalize import (
     RichSTTResult,
     build_stt_instruction,
@@ -717,6 +717,30 @@ class HearVoiceEngine:
             raw_output = await self.gemini_client.transcribe(
                 audio, instruction=instruction, endpoint=endpoint
             )
+            if not raw_output and ffmpeg_path:
+                is_already_wav = (
+                    (audio.audio_format or "").strip().lower() == "wav"
+                    or (audio.mime_type or "").split(";", 1)[0].strip().lower()
+                    in ("audio/wav", "audio/x-wav", "audio/wave")
+                )
+                err_detail = str(
+                    getattr(self.gemini_client, "last_error", "")
+                    or getattr(self._transport, "last_error", "")
+                    or ""
+                )
+                if not is_already_wav and is_unsupported_audio_format_400(err_detail):
+                    logger.warning(
+                        "[HearVoice] 主通道拒绝当前音频格式 "
+                        f"({audio.mime_type or audio.audio_format or 'unknown'})，"
+                        "尝试转码为 16kHz 单声道 WAV 重试一次"
+                    )
+                    wav_audio = await transcode_audio_to_wav_resolved(
+                        audio, ffmpeg_path=ffmpeg_path
+                    )
+                    if wav_audio is not None:
+                        raw_output = await self.gemini_client.transcribe(
+                            wav_audio, instruction=instruction, endpoint=endpoint
+                        )
 
         raw_output = clean_transcript(
             raw_output,

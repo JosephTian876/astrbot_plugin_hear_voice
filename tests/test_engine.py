@@ -427,3 +427,206 @@ async def test_merged_provider_source_and_disable_fallback_and_fallback_only():
     assert res_fb.fallback_used is True
     assert res_fb.transcript == "仅备通道生效"
     await engine_fb.close()
+
+
+@pytest.mark.asyncio
+async def test_gemini_400_unsupported_format_transcodes_wav_and_retries_once_successfully(caplog):
+    ctx = FakeContext(
+        {
+            "AlmoonsGemini-1": FakeChatProvider(
+                provider_id="AlmoonsGemini-1",
+                api_base="https://api.starbridge.zone",
+                api_key="sk-gem-retry-1111",
+                model="gemini-3.8-flash",
+            ),
+            "deepseek/deepseek-flash": FakeChatProvider(
+                provider_id="deepseek/deepseek-flash",
+                provider_type="openai_chat_completion",
+                api_base="https://api.deepseek.com/v1",
+                api_key="sk-ds-retry-2222",
+                model="deepseek-flash",
+                provider_source_id="deepseek",
+            ),
+        }
+    )
+    cfg = HearVoiceConfig.from_mapping(
+        {
+            "provider_id": "AlmoonsGemini-1",
+            "fallback_provider_id": "deepseek/deepseek-flash",
+            "output_mode": "simple",
+            "retry_times": 0,
+        }
+    )
+    engine = HearVoiceEngine(ctx, cfg)
+    mp3_bytes = b"ID3\x03\x00\x00\x00\x00\x00\x10" + (b"\x00" * 32)
+    wav_bytes = make_wav_bytes(duration_ms=100, sample_rate=16000)
+    audio = ResolvedAudio(
+        base64_data=base64.b64encode(mp3_bytes).decode("ascii"),
+        mime_type="audio/mpeg",
+        audio_format="mp3",
+        size_bytes=len(mp3_bytes),
+        source_kind="quoted",
+        raw_bytes=mp3_bytes,
+    )
+
+    transcode_calls: list[dict[str, Any]] = []
+
+    async def _fake_ffmpeg_transcode(ffmpeg_path, raw_bytes, *, input_suffix, output_suffix, output_args, timeout_sec=None):
+        transcode_calls.append(
+            {
+                "ffmpeg_path": ffmpeg_path,
+                "input_suffix": input_suffix,
+                "output_suffix": output_suffix,
+                "output_args": output_args,
+            }
+        )
+        return wav_bytes
+
+    def _route(call: dict[str, Any]):
+        if "generateContent" in call["url"]:
+            mime = call["json"]["contents"][0]["parts"][0]["inline_data"]["mime_type"]
+            if mime == "audio/mp3":
+                return _MockResp(
+                    400,
+                    {
+                        "error": {
+                            "code": 400,
+                            "message": "The attachment format is not supported",
+                            "status": "INVALID_ARGUMENT",
+                        }
+                    },
+                )
+            if mime == "audio/wav":
+                return _MockResp(
+                    200,
+                    {"candidates": [{"content": {"parts": [{"text": "转码 WAV 后主通道成功"}]}}]},
+                )
+        raise AssertionError(f"Unexpected call: {call['url']}")
+
+    sess = _MultiRouteMockSession(_route)
+    engine._transport._session = sess
+
+    with (
+        caplog.at_level(logging.WARNING),
+        patch("hear_voice.audio_resolver._run_ffmpeg_transcode", side_effect=_fake_ffmpeg_transcode),
+    ):
+        res, status = await engine.transcribe_audio(audio, ffmpeg_path="/usr/bin/ffmpeg")
+
+    assert status == "ok"
+    assert res is not None
+    assert res.engine_used == "gemini"
+    assert res.fallback_used is False
+    assert res.transcript == "转码 WAV 后主通道成功"
+    assert len(sess.calls) == 2
+    assert sess.calls[0]["json"]["contents"][0]["parts"][0]["inline_data"]["mime_type"] == "audio/mp3"
+    assert sess.calls[1]["json"]["contents"][0]["parts"][0]["inline_data"]["mime_type"] == "audio/wav"
+    assert len(transcode_calls) == 1
+    assert transcode_calls[0]["output_suffix"] == ".wav"
+    assert transcode_calls[0]["output_args"] == ("-c:a", "pcm_s16le", "-ar", "16000", "-ac", "1")
+    await engine.close()
+
+
+@pytest.mark.asyncio
+async def test_gemini_400_wav_retry_still_fails_then_falls_back_to_deepseek_and_skips_when_already_wav(caplog):
+    ctx = FakeContext(
+        {
+            "AlmoonsGemini-1": FakeChatProvider(
+                provider_id="AlmoonsGemini-1",
+                api_base="https://api.starbridge.zone",
+                api_key="sk-gem-fb-1111",
+                model="gemini-3.8-flash",
+            ),
+            "deepseek/deepseek-flash": FakeChatProvider(
+                provider_id="deepseek/deepseek-flash",
+                provider_type="openai_chat_completion",
+                api_base="https://api.deepseek.com/v1",
+                api_key="sk-ds-fb-2222",
+                model="deepseek-flash",
+                provider_source_id="deepseek",
+            ),
+        }
+    )
+    cfg = HearVoiceConfig.from_mapping(
+        {
+            "provider_id": "AlmoonsGemini-1",
+            "fallback_provider_id": "deepseek/deepseek-flash",
+            "output_mode": "simple",
+            "retry_times": 0,
+        }
+    )
+    engine = HearVoiceEngine(ctx, cfg)
+    amr_bytes = b"#!AMR\n" + (b"\x00" * 24)
+    wav_bytes = make_wav_bytes(duration_ms=100, sample_rate=16000)
+    amr_audio = ResolvedAudio(
+        base64_data=base64.b64encode(amr_bytes).decode("ascii"),
+        mime_type="audio/amr",
+        audio_format="amr",
+        size_bytes=len(amr_bytes),
+        source_kind="quoted",
+        raw_bytes=amr_bytes,
+    )
+
+    transcode_count = 0
+
+    async def _fake_ffmpeg_transcode(*_args, **_kwargs):
+        nonlocal transcode_count
+        transcode_count += 1
+        return wav_bytes
+
+    def _route(call: dict[str, Any]):
+        if "generateContent" in call["url"]:
+            return _MockResp(
+                400,
+                {
+                    "error": {
+                        "code": 400,
+                        "message": "The attachment format is not supported",
+                        "status": "INVALID_ARGUMENT",
+                    }
+                },
+            )
+        if "/v1/tools/asr" in call["url"]:
+            return _MockResp(200, {"request_id": "fb-400", "text": "回退 DeepSeek 成功", "duration_ms": 100})
+        raise AssertionError(f"Unexpected URL: {call['url']}")
+
+    sess = _MultiRouteMockSession(_route)
+    engine._transport._session = sess
+
+    with (
+        caplog.at_level(logging.WARNING),
+        patch("hear_voice.audio_resolver._run_ffmpeg_transcode", side_effect=_fake_ffmpeg_transcode),
+    ):
+        res, status = await engine.transcribe_audio(amr_audio, ffmpeg_path="/usr/bin/ffmpeg")
+
+    assert status == "ok"
+    assert res is not None
+    assert res.engine_used == "deepseek_asr"
+    assert res.fallback_used is True
+    assert res.transcript == "回退 DeepSeek 成功"
+    # Gemini called twice (amr + single wav retry), then DeepSeek called once.
+    gemini_calls = [c for c in sess.calls if "generateContent" in c["url"]]
+    deepseek_calls = [c for c in sess.calls if "/v1/tools/asr" in c["url"]]
+    assert len(gemini_calls) == 2
+    assert gemini_calls[0]["json"]["contents"][0]["parts"][0]["inline_data"]["mime_type"] == "audio/amr"
+    assert gemini_calls[1]["json"]["contents"][0]["parts"][0]["inline_data"]["mime_type"] == "audio/wav"
+    assert len(deepseek_calls) == 1
+
+    # Already-WAV input must NOT retry primary with ffmpeg; goes straight to fallback.
+    sess.calls.clear()
+    transcode_count = 0
+    already_wav = ResolvedAudio(
+        base64_data=base64.b64encode(wav_bytes).decode("ascii"),
+        mime_type="audio/wav",
+        audio_format="wav",
+        size_bytes=len(wav_bytes),
+        raw_bytes=wav_bytes,
+    )
+    with patch("hear_voice.audio_resolver._run_ffmpeg_transcode", side_effect=_fake_ffmpeg_transcode):
+        res2, status2 = await engine.transcribe_audio(already_wav, ffmpeg_path="/usr/bin/ffmpeg")
+
+    assert status2 == "ok"
+    assert res2 is not None and res2.engine_used == "deepseek_asr" and res2.fallback_used is True
+    assert transcode_count == 0
+    assert len([c for c in sess.calls if "generateContent" in c["url"]]) == 1
+    assert len([c for c in sess.calls if "/v1/tools/asr" in c["url"]]) == 1
+    await engine.close()

@@ -18,8 +18,61 @@ __all__ = [
     "extract_empty_output_reason",
     "extract_gemini_parts_text",
     "extract_openai_message_text",
+    "is_unsupported_audio_format_400",
+    "normalize_gemini_audio_mime",
     "sanitize_error_message",
 ]
+
+
+def normalize_gemini_audio_mime(mime_type: str, audio_format: str = "") -> str:
+    """Normalize audio MIME type for Gemini Native ``inline_data`` payloads.
+
+    Some Gemini relays/gateways reject ``audio/mpeg`` with HTTP 400
+    ``The attachment format is not supported`` while accepting ``audio/mp3``.
+    """
+    raw = (mime_type or "").split(";", 1)[0].strip().lower()
+    if raw in ("audio/mpeg", "audio/x-mpeg", "audio/mp3", "audio/x-mp3"):
+        return "audio/mp3"
+    if raw:
+        return raw
+    fmt = (audio_format or "").strip().lower().lstrip(".")
+    if fmt == "mp3":
+        return "audio/mp3"
+    if fmt == "wav":
+        return "audio/wav"
+    return f"audio/{fmt}" if fmt else "audio/wav"
+
+
+def is_unsupported_audio_format_400(error_text: str) -> bool:
+    """Return True when a Gemini HTTP 400 error reports unsupported audio/attachment format."""
+    low = (error_text or "").lower()
+    if "http 400" not in low:
+        return False
+    has_format_hint = any(
+        kw in low
+        for kw in (
+            "attachment format",
+            "audio format",
+            "mime type",
+            "mimetype",
+            "mime_type",
+            "media type",
+            "inline_data",
+            "unable to decode",
+            "invalid audio",
+            "unsupported audio",
+        )
+    )
+    has_reject_hint = any(
+        kw in low
+        for kw in (
+            "not supported",
+            "unsupported",
+            "invalid",
+            "unable to decode",
+        )
+    )
+    return has_format_hint and has_reject_hint
 
 
 def build_gemini_generate_url(api_base: str, model: str) -> str:
@@ -208,6 +261,7 @@ class GeminiClient:
             text = extract_openai_message_text(data)
         else:
             url = build_gemini_generate_url(endpoint.api_base, endpoint.model)
+            mime_type = normalize_gemini_audio_mime(audio.mime_type, audio.audio_format)
             payload = {
                 "contents": [
                     {
@@ -215,7 +269,7 @@ class GeminiClient:
                         "parts": [
                             {
                                 "inline_data": {
-                                    "mime_type": audio.mime_type,
+                                    "mime_type": mime_type,
                                     "data": audio.base64_data,
                                 }
                             },

@@ -546,6 +546,50 @@ async def _transcode_bytes_with_ffmpeg(
     )
 
 
+async def transcode_audio_to_wav_resolved(
+    audio: ResolvedAudio,
+    *,
+    ffmpeg_path: str,
+    timeout_sec: float | None = None,
+) -> ResolvedAudio | None:
+    """Transcode a ``ResolvedAudio`` payload once to 16kHz mono 16-bit PCM WAV."""
+    if not ffmpeg_path:
+        return None
+    try:
+        src_bytes = audio.source_raw_bytes if audio.source_raw_bytes else audio.get_bytes()
+    except Exception as exc:
+        logger.warning(f"[HearVoice] WAV 重试前读取音频字节失败: {type(exc).__name__}")
+        return None
+    if not src_bytes:
+        return None
+
+    src_fmt = audio.source_format or audio.audio_format or detect_audio_format_bytes(src_bytes)
+    in_suffix = f".{src_fmt}" if src_fmt and src_fmt != "unknown" else ".bin"
+    try:
+        wav_bytes = await _run_ffmpeg_transcode(
+            ffmpeg_path,
+            src_bytes,
+            input_suffix=in_suffix,
+            output_suffix=".wav",
+            output_args=("-c:a", "pcm_s16le", "-ar", "16000", "-ac", "1"),
+            timeout_sec=timeout_sec,
+        )
+    except Exception as exc:
+        logger.warning(f"[HearVoice] 音频转码 16kHz WAV 重试失败: {type(exc).__name__}")
+        return None
+
+    return ResolvedAudio(
+        base64_data=base64.b64encode(wav_bytes).decode("ascii"),
+        mime_type="audio/wav",
+        audio_format="wav",
+        size_bytes=len(wav_bytes),
+        source_kind=audio.source_kind,
+        raw_bytes=wav_bytes,
+        source_raw_bytes=audio.source_raw_bytes or src_bytes,
+        source_format=audio.source_format or audio.audio_format,
+    )
+
+
 async def prepare_audio_for_deepseek(
     audio: ResolvedAudio,
     *,

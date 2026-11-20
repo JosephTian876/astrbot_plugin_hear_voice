@@ -6,6 +6,7 @@ import asyncio
 import inspect
 import random
 import re
+import time
 from typing import Any
 
 try:
@@ -639,6 +640,7 @@ class HearVoicePipeline:
             if not allowed:
                 return
 
+            started_at = time.monotonic()
             primary_ep, fallback_ep = await self.engine.resolve_endpoints()
             if primary_ep is None and fallback_ep is None:
                 logger.warning("[HearVoice] 未找到可用的主/备语音识别接口配置，按失败策略处理")
@@ -772,6 +774,22 @@ class HearVoicePipeline:
                 _set_dual_extra(
                     event, EXTRA_HEAR_VOICE_CACHE_ONLY, EXTRA_STT_CACHE_ONLY, not should_reply
                 )
+
+            elapsed_ms = int(round((time.monotonic() - started_at) * 1000))
+            sources_ordered: list[str] = []
+            for voice, _ in completed:
+                if voice.source_kind and voice.source_kind not in sources_ordered:
+                    sources_ordered.append(voice.source_kind)
+            source_str = "+".join(sources_ordered) or "direct"
+            logger.info(
+                "[HearVoice] 语音转写完成 "
+                f"engine={engine_used_str or 'unknown'} "
+                f"fallback={'true' if fallback_used else 'false'} "
+                f"source={source_str} "
+                f"count={len(completed)} "
+                f"chars={len(plain_transcript_only)} "
+                f"elapsed_ms={elapsed_ms}"
+            )
 
             if self.cfg.show_transcript:
                 yield event.plain_result(f"📝 识别结果：{plain_transcript_only}")

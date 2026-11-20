@@ -654,3 +654,54 @@ async def test_plugin_shell_lifecycle_and_terminate():
     assert "hear_voice_stt_shell" in ctx.provider_manager.inst_map
     await plugin.terminate()
     assert "hear_voice_stt_shell" not in ctx.provider_manager.inst_map
+
+
+@pytest.mark.asyncio
+async def test_production_info_summary_logged_redacted_when_debug_mode_false(caplog):
+    ctx = _make_ctx()
+    cfg = HearVoiceConfig.from_mapping(
+        {
+            "provider_id": "AlmoonsGemini-1",
+            "output_mode": "simple",
+            "debug_mode": False,
+            "handle_quoted_voice": True,
+            "temp_cleanup_interval_sec": 0,
+        }
+    )
+    secret_transcript = "绝密口令九五二七不要写进日志"
+    pipe = HearVoicePipeline(ctx, cfg, client=_StubClient(secret_transcript))
+
+    # Direct voice with debug_mode=False
+    ev_direct = FakeEvent(messages=[Record(file=make_data_uri_wav())])
+    with caplog.at_level(logging.INFO):
+        await _collect_stage1(pipe, ev_direct)
+
+    info_lines = [r.message for r in caplog.records if r.levelno == logging.INFO and "语音转写完成" in r.message]
+    assert len(info_lines) == 1
+    line = info_lines[0]
+    assert "[HearVoice] 语音转写完成" in line
+    assert "engine=gemini" in line
+    assert "fallback=false" in line
+    assert "source=direct" in line
+    assert "count=1" in line
+    assert f"chars={len(secret_transcript)}" in line
+    assert "elapsed_ms=" in line
+    # Strictly redacted: no raw transcript content, no secrets, no file paths.
+    assert secret_transcript not in line
+    assert "sk-ds-secret-8888" not in line
+    assert "data:audio" not in line
+
+    # Quoted voice also emits concise redacted INFO summary with source=quoted
+    caplog.clear()
+    quoted_reply = Reply(id="q-99", chain=[Record(file=make_data_uri_wav())])
+    ev_quoted = FakeEvent(messages=[quoted_reply, Plain("他说了啥")])
+    with caplog.at_level(logging.INFO):
+        await _collect_stage1(pipe, ev_quoted)
+
+    quoted_lines = [r.message for r in caplog.records if r.levelno == logging.INFO and "语音转写完成" in r.message]
+    assert len(quoted_lines) == 1
+    qline = quoted_lines[0]
+    assert "source=quoted" in qline
+    assert "count=1" in qline
+    assert secret_transcript not in qline
+    await pipe.shutdown()

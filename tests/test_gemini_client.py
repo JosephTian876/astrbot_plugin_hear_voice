@@ -19,6 +19,8 @@ from hear_voice.gemini_client import (
     build_openai_chat_url,
     extract_gemini_parts_text,
     extract_openai_message_text,
+    is_unsupported_audio_format_400,
+    normalize_gemini_audio_mime,
 )
 from tests.conftest import FakeChatProvider, FakeContext
 
@@ -403,4 +405,68 @@ async def test_client_redacts_secrets_and_retries_429_5xx_and_200_errors(caplog)
         assert "SAFETY" in client.last_error
     assert "wrapped error" in caplog.text
     assert "SAFETY" in caplog.text
+    await client.close()
+
+
+def test_normalize_gemini_audio_mime_and_400_format_detector():
+    assert normalize_gemini_audio_mime("audio/mpeg") == "audio/mp3"
+    assert normalize_gemini_audio_mime("audio/x-mpeg") == "audio/mp3"
+    assert normalize_gemini_audio_mime("AUDIO/MPEG; charset=binary") == "audio/mp3"
+    assert normalize_gemini_audio_mime("audio/mp3") == "audio/mp3"
+    assert normalize_gemini_audio_mime("audio/wav") == "audio/wav"
+    assert normalize_gemini_audio_mime("audio/ogg") == "audio/ogg"
+    assert normalize_gemini_audio_mime("", "mp3") == "audio/mp3"
+    assert normalize_gemini_audio_mime("", "wav") == "audio/wav"
+
+    assert is_unsupported_audio_format_400(
+        "HTTP 400: INVALID_ARGUMENT: The attachment format is not supported"
+    )
+    assert is_unsupported_audio_format_400(
+        'HTTP 400: {"error":{"code":400,"message":"Unsupported MIME type: audio/amr"}}'
+    )
+    assert is_unsupported_audio_format_400("HTTP 400: unsupported audio format")
+    assert not is_unsupported_audio_format_400("HTTP 400: API key not valid")
+    assert not is_unsupported_audio_format_400("HTTP 503: attachment format is not supported")
+    assert not is_unsupported_audio_format_400(
+        "HTTP 200 error payload: attachment format is not supported"
+    )
+
+
+@pytest.mark.asyncio
+async def test_client_gemini_native_normalizes_audio_mpeg_to_audio_mp3():
+    cfg = HearVoiceConfig.from_mapping(
+        {
+            "api_base": "https://api.starbridge.zone",
+            "api_key": "sk-gem-mime-0001",
+            "model": "gemini-3.8-flash",
+            "retry_times": 0,
+        }
+    )
+    ep = await resolve_endpoint(None, cfg)
+    assert ep is not None
+    assert ep.api_format == "gemini_native"
+
+    recorded: list[dict[str, Any]] = []
+    responses = [
+        _MockPostResp(
+            200,
+            {"candidates": [{"content": {"parts": [{"text": "引用语音正常识别"}]}}]},
+        )
+    ]
+    client = GeminiClient(cfg)
+    client._session = _MockSession(responses, recorded)
+
+    audio = ResolvedAudio(
+        base64_data="SUQz",
+        mime_type="audio/mpeg",
+        audio_format="mp3",
+        size_bytes=3,
+        source_kind="quoted",
+    )
+    out = await client.transcribe(audio, instruction="transcribe", endpoint=ep)
+    assert out == "引用语音正常识别"
+    assert len(recorded) == 1
+    inline = recorded[0]["json"]["contents"][0]["parts"][0]["inline_data"]
+    assert inline["mime_type"] == "audio/mp3"
+    assert inline["data"] == "SUQz"
     await client.close()
